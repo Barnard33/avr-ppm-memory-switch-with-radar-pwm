@@ -1,0 +1,20 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 11.00
+# Atmel Studio Solution File, Format Version 11.00
+Project("{54F91283-7BC4-4236-8FF9-10F437C3AD48}") = "avr-ppm-memory-switch-with-radar-pwm", "avr-ppm-memory-switch-with-radar-pwm\avr-ppm-memory-switch-with-radar-pwm.cproj", "{87F9E2D9-2A5C-4CBD-939A-386D400A3D39}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|AVR = Debug|AVR
+		Release|AVR = Release|AVR
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{87F9E2D9-2A5C-4CBD-939A-386D400A3D39}.Debug|AVR.ActiveCfg = Debug|AVR
+		{87F9E2D9-2A5C-4CBD-939A-386D400A3D39}.Debug|AVR.Build.0 = Debug|AVR
+		{87F9E2D9-2A5C-4CBD-939A-386D400A3D39}.Release|AVR.ActiveCfg = Release|AVR
+		{87F9E2D9-2A5C-4CBD-939A-386D400A3D39}.Release|AVR.Build.0 = Release|AVR
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal
