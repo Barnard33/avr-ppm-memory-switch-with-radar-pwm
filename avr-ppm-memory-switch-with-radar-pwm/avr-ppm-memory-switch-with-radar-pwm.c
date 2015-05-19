@@ -2,7 +2,7 @@
  *
  * avr-ppm-memory-switch-with-radar-pwm.c
  *
- * Copyright (C) 2014  Barnard33
+ * Copyright (C) 2014 - 2015  Barnard33
  * 
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -32,6 +32,7 @@
 #define STATUS_START 0
 #define STATUS_COMPLETE 1
 #define STATUS_STOP 2
+#define AVG_PULSE_COUNT 20
 
 #include <avr/io.h>
 #include <avr/interrupt.h>
@@ -58,6 +59,7 @@ inline void set_oc0a(uint8_t compare) {
 
 volatile uint8_t pulse_status;
 
+uint16_t neutral_pulse_length = 0;
 uint16_t forward_on_pulse_length = 0;
 uint16_t backwards_on_pulse_length = 0;
 
@@ -70,8 +72,8 @@ uint16_t backwards_on_pulse_length = 0;
  */
 void setup() {
 	uint16_t pulse_length = 0;
-	uint16_t neutral_pulse_length = 0;
 	uint8_t setup_counter = 0;
+	uint16_t diff40;
 	
 	MCUCR |= (1 << ISC00) | (1 << ISC01); // rising edge on int0 triggers IRQ (for setup)
 	pulse_status = 0;
@@ -96,7 +98,7 @@ void setup() {
 			if(setup_counter == 5) {
 				cli();
 				neutral_pulse_length = neutral_pulse_length / (setup_counter - 1);
-				uint16_t diff40 = (((((neutral_pulse_length * 20) / 15) - neutral_pulse_length) * 4) / 10);
+				diff40 = (((((neutral_pulse_length * 20) / 15) - neutral_pulse_length) * 4) / 10);
 				forward_on_pulse_length = neutral_pulse_length + diff40;
 				backwards_on_pulse_length = neutral_pulse_length - diff40;
 				break;
@@ -109,10 +111,12 @@ void setup() {
 int main(void) {
 	uint16_t pulse_length = 0;
 	uint8_t was_last_on = 0;
+	uint8_t pulse_count = 0;
+	uint16_t pulse_length_avg = 0;
 	
 	//init pwm for radar gear motor
 	init_timer0_pwm();
-	set_oc0a(10);
+	set_oc0a(5);
 	connect_oc0a();
 
 	DDRB &= ~(1 << DDB1); // define PB1 as input (for int0)
@@ -145,20 +149,28 @@ int main(void) {
 			pulse_status &= ~(1 << STATUS_COMPLETE);
 			pulse_status |= (1 << STATUS_STOP);
 			
-			if((backwards_on_pulse_length < pulse_length) && (pulse_length < forward_on_pulse_length)) {
-				// if the joystick returns to neutral position, 
-				// moving it forwards/backwards again should toggle the switch
-				was_last_on = 0; 
+			pulse_count++;	
+			pulse_length_avg += pulse_length / AVG_PULSE_COUNT;
+			
+			if(pulse_count >= AVG_PULSE_COUNT) {
+				pulse_count = 0;
+							
+				if((backwards_on_pulse_length < pulse_length_avg) && (pulse_length_avg < forward_on_pulse_length)) {
+					// if the joystick returns to neutral position, 
+					// moving it forwards/backwards again should toggle the switch
+					was_last_on = 0; 
+				}
+				else if((pulse_length_avg < backwards_on_pulse_length) && !was_last_on) {
+					PORTB ^= (1 << PORTB4); // toggle PB4
+					was_last_on = 1;
+				}
+				else if((pulse_length_avg > forward_on_pulse_length) && !was_last_on) {
+					PORTB ^= (1 << PORTB3); // toggle PB3
+					was_last_on = 1;
+				}
+				
+				pulse_length_avg = 0;
 			}
-			else if((pulse_length < backwards_on_pulse_length) && !was_last_on) {
-				PORTB ^= (1 << PORTB4); // toggle PB4
-				was_last_on = 1;
-			}
-			else if((pulse_length > forward_on_pulse_length) && !was_last_on) {
-				PORTB ^= (1 << PORTB3); // toggle PB3
-				was_last_on = 1;
-			}
-			pulse_length = 0;
 		} 
     }
 }

@@ -1,0 +1,23 @@
+Place C1 very close to the VCC and GND pins of the µC.
+
+The reset line has an internal pull-up resistor, but if the environment is noisy, as it is in a R/C model, it can be insufficient and resets can occur sporadically.
+
+If you want to update the program although the micro controller sticks on a breadboard/protoboard (in-circuit programming), it is necessary to allow entering both, the programming mode and the ordinary low level reset. This can be achieved by applying an external pull-up resistor to the RESET line. This pull-up resistor makes sure that the RESET line does not go low unintended. The pull-up should not be so strong that the programmer cannot trigger a reset by drawing the RESET line to low. Refer to the datasheet for the value of the pull-up resistor on specific devices.
+
+The pull-up resistor R4 works perfectly with the AVR ISP MKII programmer. The capacitator C2 is only necessary if you are still observing unintended resets.
+
+All output pins are switching VCC to GND. Hence, the connector X1 provides a common VCC.
+
+X1-1 VCC
+X1-2 drives the gear motor
+X1-3 drives LED navigation lights
+X1-4 drives LED navigation lights
+
+
+
+
+
+
+
+
+
