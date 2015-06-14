@@ -29,13 +29,10 @@
 #define F_CPU 9000000
 #endif
 
-#define STATUS_START 0
-#define STATUS_COMPLETE 1
-#define STATUS_STOP 2
-#define AVG_PULSE_COUNT 20
+#define AVG_PULSE_COUNT 10
 
 #include <avr/io.h>
-#include <avr/interrupt.h>
+#include <util/delay.h>
 
 inline void init_timer0_pwm(void) {
 	/* clear OC0A on compare match when up-counting
@@ -57,132 +54,103 @@ inline void set_oc0a(uint8_t compare) {
 	OCR0A = compare;
 }
 
-volatile uint8_t pulse_status;
-
-uint16_t neutral_pulse_length = 0;
 uint16_t forward_on_pulse_length = 0;
 uint16_t backwards_on_pulse_length = 0;
+uint16_t diff40;
 
-/**
- * A simple setup routine that uses five ppm pulses to average the pulse length in neutral position.
- * It is assumed that the joystick is in neutral position when these pulses are measured during start up.
- * A difference of 40% to the neutral position is considered to toggle one of the two channels.
- * The two threshold values are stored in the global variables <code>forward_on_pulse_length</code> and 
- * <code>backwards_on_pulse_length</code>
- */
-void setup() {
-	uint16_t pulse_length = 0;
-	uint8_t setup_counter = 0;
-	uint16_t diff40;
-	
-	MCUCR |= (1 << ISC00) | (1 << ISC01); // rising edge on int0 triggers IRQ (for setup)
-	pulse_status = 0;
-	pulse_status |= (STATUS_STOP);
-	
-	sei();
-	while(1) {
-		if(!pulse_status) {
-			pulse_length++;
-		}
-		else if(pulse_status & (1 << STATUS_START)) {
-			// reset STATUS_STOP, which starts counting in the next cycle
-			pulse_status = 0;
-			pulse_length = 0;
-		}
-		else if(pulse_status & (1 << STATUS_COMPLETE)) {
-			pulse_status &= ~(1 << STATUS_COMPLETE);
-			pulse_status |= (1 << STATUS_STOP);
-			
-			neutral_pulse_length += pulse_length;
-			setup_counter++;
-			if(setup_counter == 5) {
-				cli();
-				neutral_pulse_length = neutral_pulse_length / (setup_counter - 1);
-				diff40 = (((((neutral_pulse_length * 20) / 15) - neutral_pulse_length) * 4) / 10);
-				forward_on_pulse_length = neutral_pulse_length + diff40;
-				backwards_on_pulse_length = neutral_pulse_length - diff40;
-				break;
-			}
-			pulse_length = 0;
-		}
-	}
-}
+uint16_t pulse_length = 0;
+uint16_t pulse_length_avg = 0;
+
+uint8_t was_last_on = 0;
+uint8_t pulse_count = 0;
+
+uint8_t ppm_in = 0;
+uint8_t last_ppm_in = 0;
+
+uint8_t do_setup = 1;
 
 int main(void) {
-	uint16_t pulse_length = 0;
-	uint8_t was_last_on = 0;
-	uint8_t pulse_count = 0;
-	uint16_t pulse_length_avg = 0;
-	
 	//init pwm for radar gear motor
 	init_timer0_pwm();
-	set_oc0a(5);
+	set_oc0a(4);
 	connect_oc0a();
 
-	DDRB &= ~(1 << DDB1); // define PB1 as input (for int0)
+	DDRB &= ~(1 << DDB1); // define PB1 as input for ppm
 	
 	DDRB |= (1 << DDB3) | (1 << DDB4);  // define PB3 and PB4 as out pins
-	PORTB &= ~((1 << PORTB3) | (1 << PORTB4)); // set PB3 and PB4 to logical zero;
+	PORTB = (1 << PORTB3); // set PB3 to logical one; //sorry, currently no transistor applied to the breadboard, therefore the signal has to be inverted to turn the LED off
+	PORTB &= ~(1 << PORTB4); // set PB4 to logical zero;
 	
-	GIMSK |= (1 << INT0); // enable interrupt source int0
+	//hopefully, the receiver has bound after a second and sends the ppm signal of the neutral position
+	_delay_ms(1000); //here, decreased resolution is sufficient, see http://www.atmel.com/webdoc/AVRLibcReferenceManual/group__util__delay_1gad22e7a36b80e2f917324dc43a425e9d3.html
 	
-	setup();
-	
-	MCUCR |= (1 << ISC00) | (1 << ISC01); // rising edge on int0 triggers IRQ (for normal operation)
-	
-	pulse_status = 0;
-	pulse_status |= (1 << STATUS_STOP);
-	
-	sei();
+	//start in a defined condition, i.e., wait until a possibly active ppm pulse is over
+	while(PINB & (1 << PINB1)) {
+		//do nothing;
+		asm ( "NOP" );
+	}
 	
     while(1)
     {
-		if(!pulse_status) {
-			pulse_length++;		
+		//read status of pin B1
+		ppm_in = PINB & (1 << PINB1);
+		
+		if(ppm_in && last_ppm_in) {
+			//last pulse and current pulse remained high level: count pulse length
+			pulse_length++;
 		}
-		else if(pulse_status & (1 << STATUS_START)) {
-			// reset STATUS_STOP, which starts counting in the next cycle
-			pulse_status = 0;
+		else if(ppm_in && !last_ppm_in) {
+			//rising edge: reset pulse length counter
+			last_ppm_in = 1;
 			pulse_length = 0;
 		}
-		else if(pulse_status & (1 << STATUS_COMPLETE)) {
-			pulse_status &= ~(1 << STATUS_COMPLETE);
-			pulse_status |= (1 << STATUS_STOP);
+		else if(!ppm_in && last_ppm_in) {
+			//falling edge: evaluate pulse length
+			last_ppm_in = 0;
 			
-			pulse_count++;	
+			pulse_count++;
 			pulse_length_avg += pulse_length / AVG_PULSE_COUNT;
 			
 			if(pulse_count >= AVG_PULSE_COUNT) {
 				pulse_count = 0;
-							
-				if((backwards_on_pulse_length < pulse_length_avg) && (pulse_length_avg < forward_on_pulse_length)) {
-					// if the joystick returns to neutral position, 
-					// moving it forwards/backwards again should toggle the switch
-					was_last_on = 0; 
+					
+				if(do_setup) {
+					do_setup = 0;
+					/* 
+					 * A simple setup routine that uses five ppm pulses to average the pulse length in neutral position.
+					 * It is assumed that the joystick is in neutral position when these pulses are measured during start up.
+					 * A difference of 50% to the neutral position is considered to toggle one of the two channels.
+					 * The two threshold values are stored in the global variables <code>forward_on_pulse_length</code> and
+					 * <code>backwards_on_pulse_length</code>
+					 * 
+					 * (((neutral_pulse_length * 20) / 15) - neutral_pulse_length) should be expressed as neutral_pulse_length / 3
+					 * 
+					 * Why divided by 3? The PPM neutral position signal is usually 1.5ms long.
+					 * It varies between +/- 0.5ms for the backwards/forwards signal, i.e., the full astern signal may be 1.0ms long and the full ahead signal 2.0ms.
+					 * The exact value depends on the trimming capabilities of your transmitter/receiver.
+					 */
+					diff40 = (((((pulse_length_avg * 20) / 15) - pulse_length_avg) * 5) / 10);
+					forward_on_pulse_length = pulse_length_avg + diff40;
+					backwards_on_pulse_length = pulse_length_avg - diff40;
 				}
-				else if((pulse_length_avg < backwards_on_pulse_length) && !was_last_on) {
-					PORTB ^= (1 << PORTB4); // toggle PB4
-					was_last_on = 1;
-				}
-				else if((pulse_length_avg > forward_on_pulse_length) && !was_last_on) {
-					PORTB ^= (1 << PORTB3); // toggle PB3
-					was_last_on = 1;
+				else {
+					if((backwards_on_pulse_length < pulse_length_avg) && (pulse_length_avg < forward_on_pulse_length)) {
+						// if the joystick returns to neutral position,
+						// moving it forwards/backwards again should toggle the switch
+						was_last_on = 0;
+					}
+					else if((pulse_length_avg < backwards_on_pulse_length) && !was_last_on) {
+						PORTB ^= (1 << PORTB4); // toggle PB4
+						was_last_on = 1;
+					}
+					else if((pulse_length_avg > forward_on_pulse_length) && !was_last_on) {
+						PORTB ^= (1 << PORTB3); // toggle PB3
+						was_last_on = 1;
+					}	
 				}
 				
 				pulse_length_avg = 0;
 			}
-		} 
+		}
     }
-}
-
-/* ISR for servo/ppm input pin on int0 */
-ISR(INT0_vect) {
-	if((MCUCR & (1<<ISC00)) > 0) {  // check if triggered on rising edge
-		pulse_status |= (1 << STATUS_START);
-		MCUCR &= ~(1 << ISC00); // falling edge on int0 triggers IRQ
-	}
-	else {
-		MCUCR |= (1 << ISC00); // rising edge on int0 triggers IRQ
-		pulse_status |= (1 << STATUS_COMPLETE);
-	}
 }
